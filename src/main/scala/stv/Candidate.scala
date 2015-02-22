@@ -135,10 +135,11 @@ trait Count {
 
     val eliminatedSet = eliminated.map(_.candidate)
     val loser = hopefuls.minBy(candidate => candidate.votes.length)
-    val loserVotes = loser.votes.map(_.transfer(eliminatedSet)).collect {
+    val newEliminatedSet = eliminatedSet + loser.candidate
+    val loserVotes = loser.votes.map(_.transfer(newEliminatedSet)).collect {
       case Some(allocatedVote) => allocatedVote
     }
-    val loserVotesByCandidate = loserVotes.groupBy(_.selected)
+    val loserVotesByCandidate = loserVotes.groupBy(_.selected).withDefaultValue(List())
 
     val stillElected = for (
       ElectedCandidate(candidate, votes) <- elected
@@ -146,6 +147,7 @@ trait Count {
 
     val formerHopefuls = for (
       HopefulCandidate(candidate, votes) <- hopefuls
+      if HopefulCandidate(candidate, votes) != loser
     ) yield {
       val newVotes = votes ++ loserVotesByCandidate(candidate)
       if (meetsQuota(newVotes)) {
@@ -247,6 +249,11 @@ trait Count {
     }
     filledSeats ++ List.fill(numSeats - filledSeats.length) {None}
   }
+}
+
+class SomeCount(val election: Election) extends Count {
+  val quota = droopQuota
+  val surplusAllocator = null // TODO
 }
 
 object Test extends App {
