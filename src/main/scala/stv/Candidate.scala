@@ -134,6 +134,19 @@ trait Count {
   def surplusAllocator: SurplusVoteAllocator
 
   /**
+   * Find new elected candidates from the hopeful set.
+   * @param hopefuls Set of unelected candidates
+   * @return Partition of Elected/Hopeful candidates
+   */
+  def repartition(hopefuls: Set[HopefulCandidate]): Tuple2[List[ElectedCandidate], Set[HopefulCandidate]] = {
+    val (elected, unelected) = hopefuls.partition(hopeful => meetsQuota(hopeful.votes))
+    (
+      elected.map(hopeful => ElectedCandidate(hopeful.candidate, hopeful.votes)).toList,
+      unelected
+    )
+  }
+
+  /**
    * Eliminate a single candidate. TODO: separate out candidate selection
    * @param currentResult the current election result
    * @return The new result
@@ -156,24 +169,15 @@ trait Count {
       ElectedCandidate(candidate, votes) <- elected
     ) yield ElectedCandidate(candidate, votes ++ loserVotesByCandidate(candidate))
 
-    var newElected = elected
-    var stillHopeful: Set[HopefulCandidate] = Set()
     val newEliminated = eliminated + EliminatedCandidate(loser.candidate)
+    val (newElected, stillHopeful) = repartition(
+      for (
+        hopeful <- hopefuls
+        if hopeful != loser
+      ) yield (HopefulCandidate(hopeful.candidate, hopeful.votes ++ loserVotesByCandidate(hopeful.candidate)))
+    )
 
-    hopefuls.foreach(hopeful => {
-      if(hopeful != loser) {
-        val candidate = hopeful.candidate
-        val votes = hopeful.votes
-        val newVotes = votes ++ loserVotesByCandidate(candidate)
-        if(meetsQuota(newVotes)) {
-          newElected = ElectedCandidate(candidate, newVotes) :: elected
-        } else {
-          stillHopeful = stillHopeful + HopefulCandidate(candidate, newVotes)
-        }
-      }
-    })
-
-    ElectionResult(newElected, stillHopeful, newEliminated)
+    ElectionResult(newElected ++ stillElected, stillHopeful, newEliminated)
   }
 
   /**
