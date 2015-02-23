@@ -251,7 +251,7 @@ trait Count {
   }
 }
 
-class SomeCount(val election: Election) extends Count {
+case class SomeCount(election: Election) extends Count {
   val quota = droopQuota
   val surplusAllocator = null // TODO
 }

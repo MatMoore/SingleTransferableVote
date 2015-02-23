@@ -16,20 +16,20 @@ class ElectionSpec extends FunSpec with Matchers {
 
       it("should require at least one hopeful candidate") {
         intercept[IllegalArgumentException] {
-          new SomeCount(newElection).eliminate(elected, List(), eliminated)
+          SomeCount(newElection).eliminate(elected, List(), eliminated)
         }
       }
 
       it("can eliminate the only hopeful") {
         val hopefulApple = HopefulCandidate(apple, List(appleVote))
-        val result = new SomeCount(newElection).eliminate(elected, List(hopefulApple), eliminated)
+        val result = SomeCount(newElection).eliminate(elected, List(hopefulApple), eliminated)
         result should equal (List(EliminatedCandidate(apple)))
       }
 
       describe("when apple has two votes and banana has one vote") {
         val hopefulApple = HopefulCandidate(apple, List(appleVote, appleVote))
         val hopefulBanana = HopefulCandidate(banana, List(bananaVote))
-        val result = new SomeCount(newElection).eliminate(elected, List(hopefulApple, hopefulBanana), eliminated).toSet
+        val result = SomeCount(newElection).eliminate(elected, List(hopefulApple, hopefulBanana), eliminated).toSet
 
         it("should remove banana") {
           result should contain (EliminatedCandidate(banana))

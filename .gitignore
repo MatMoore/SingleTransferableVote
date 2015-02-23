@@ -30,3 +30,5 @@ Session.vim
 .netrwhist
 *~
 
+
+.idea/workspace.xml
