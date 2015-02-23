@@ -54,12 +54,10 @@ trait SurplusVoteAllocator {
     quota: Int,
     donors: Iterable[ElectedCandidate],
     receivers: Iterable[CandidateResult]
-  ): Tuple2[List[CandidateResult], Boolean]
+  ): Tuple2[ElectionResult, Boolean]
 
-  def reallocate(quota: Int, initial: Iterable[CandidateResult]): Tuple2[List[CandidateResult], Boolean] = {
-    val elected = initial.collect { case ElectedCandidate(c, v) => ElectedCandidate(c, v)}
-    val hopeful = initial.collect { case HopefulCandidate(c, v) => HopefulCandidate(c, v)}
-    reallocateFromDonors(quota, elected, hopeful)
+  def reallocate(quota: Int, initial: ElectionResult): Tuple2[ElectionResult, Boolean] = {
+    reallocateFromDonors(quota, initial.elected, initial.hopefuls)
   }
 }
 
@@ -87,6 +85,18 @@ final case class HopefulCandidate(candidate: Candidate, votes: List[AllocatedVot
  * @param candidate The eliminated candidate.
  */
 final case class EliminatedCandidate(candidate: Candidate) extends CandidateResult
+
+/**
+ * An intermediate or final election result.
+ * @param elected List of elected candidates, starting with the most recent
+ * @param hopefuls Set of hopeful candidates
+ * @param eliminated Set of eliminated candidates
+ */
+final case class ElectionResult(elected: List[ElectedCandidate] = List(), hopefuls: Set[HopefulCandidate] = Set(), eliminated: Set[EliminatedCandidate] = Set()) {
+  require(elected.nonEmpty || hopefuls.nonEmpty || eliminated.nonEmpty)
+
+  def isFinal = hopefuls.nonEmpty
+}
 
 /**
  * Determines the result of an election.
@@ -124,15 +134,16 @@ trait Count {
   def surplusAllocator: SurplusVoteAllocator
 
   /**
-   * Eliminate a single candidate.
-   * @param elected All previously elected candidates
-   * @param hopefuls All candidates that have not been elected or eliminated yet.
-   * @param eliminated All previously eliminated candidates
-   * @return A new list of candidate results.
+   * Eliminate a single candidate. TODO: separate out candidate selection
+   * @param currentResult the current election result
+   * @return The new result
    */
-  def eliminate(elected: List[ElectedCandidate], hopefuls: List[HopefulCandidate], eliminated: Set[EliminatedCandidate]): List[CandidateResult] = {
-    require(hopefuls.length > 0)
+  def eliminate(currentResult: ElectionResult): ElectionResult = {
+    require(currentResult.hopefuls.nonEmpty)
 
+    val eliminated = currentResult.eliminated
+    val elected = currentResult.elected
+    val hopefuls = currentResult.hopefuls
     val eliminatedSet = eliminated.map(_.candidate)
     val loser = hopefuls.minBy(candidate => candidate.votes.length)
     val newEliminatedSet = eliminatedSet + loser.candidate
@@ -145,23 +156,24 @@ trait Count {
       ElectedCandidate(candidate, votes) <- elected
     ) yield ElectedCandidate(candidate, votes ++ loserVotesByCandidate(candidate))
 
-    val formerHopefuls = for (
-      HopefulCandidate(candidate, votes) <- hopefuls
-      if HopefulCandidate(candidate, votes) != loser
-    ) yield {
-      val newVotes = votes ++ loserVotesByCandidate(candidate)
-      if (meetsQuota(newVotes)) {
-        ElectedCandidate(candidate, newVotes)
-      } else {
-        HopefulCandidate(candidate, newVotes)
-      }
-    }
+    var newElected = elected
+    var stillHopeful: Set[HopefulCandidate] = Set()
+    val newEliminated = eliminated + EliminatedCandidate(loser.candidate)
 
-    /*
-    The way intermediate CandidateResults are stored is currently a bit haphazard.
-    For now just lump everything into a list
-     */
-    EliminatedCandidate(loser.candidate) :: (stillElected.toList ++ formerHopefuls.toList)
+    hopefuls.foreach(hopeful => {
+      if(hopeful != loser) {
+        val candidate = hopeful.candidate
+        val votes = hopeful.votes
+        val newVotes = votes ++ loserVotesByCandidate(candidate)
+        if(meetsQuota(newVotes)) {
+          newElected = ElectedCandidate(candidate, newVotes) :: elected
+        } else {
+          stillHopeful = stillHopeful + HopefulCandidate(candidate, newVotes)
+        }
+      }
+    })
+
+    ElectionResult(newElected, stillHopeful, newEliminated)
   }
 
   /**
@@ -169,9 +181,7 @@ trait Count {
    * @return A list containing the results per candidate at the end of each
    *         round.
    */
-  def roundCounts: List[List[CandidateResult]] = {
-    def isComplete(currentRound: List[CandidateResult]): Boolean = true
-
+  def roundCounts: List[ElectionResult] = {
     /*
     Start off with every ballot allocated to the first choice candidate
      */
@@ -185,11 +195,19 @@ trait Count {
     /*
     Elect any candidates that meet the criteria
      */
-    val initialResults: List[CandidateResult] = (for {
-      (candidate: Candidate, votes: List[AllocatedVote]) <- firstChoiceVotes
-    } yield {
-      if (votes.length > quota) ElectedCandidate(candidate, votes) else HopefulCandidate(candidate, votes)
-    }).toList
+    val (firstChoiceElected, firstChoiceUnelected) = firstChoiceVotes.partition(
+      _._2.length > quota
+    )
+
+    val electedCandidates = for (
+      (candidate: Candidate, votes: List[AllocatedVote]) <- firstChoiceElected
+    ) yield ElectedCandidate(candidate, votes)
+
+    val hopefulCandidates = for (
+      (candidate: Candidate, votes: List[AllocatedVote]) <- firstChoiceUnelected
+    ) yield HopefulCandidate(candidate, votes)
+
+    val initialResults = ElectionResult(electedCandidates.toList, hopefulCandidates.toSet)
 
     /**
      *
@@ -200,33 +218,20 @@ trait Count {
      * @param currentRound The results as they stand so far.
      * @return The results after running a new round of counting.
      */
-    def nextRound(currentRound: List[CandidateResult]): List[CandidateResult] = {
+    def nextRound(currentRound: ElectionResult): ElectionResult = {
       val (reallocatedSurplusResults, newlyElected) = surplusAllocator.reallocate(quota, initialResults)
 
       if(newlyElected) {
         reallocatedSurplusResults
       } else {
-        /*
-        FIXME: this is not very nice
-         */
-        val elected = (reallocatedSurplusResults.collect {
-          case ElectedCandidate(candidate, votes) => ElectedCandidate(candidate, votes)
-        }).toList
-        val hopeful = (reallocatedSurplusResults collect {
-          case HopefulCandidate(candidate, votes) => HopefulCandidate(candidate, votes)
-        }).toList
-        val eliminated = (reallocatedSurplusResults collect {
-          case EliminatedCandidate(candidate) => EliminatedCandidate(candidate)
-        }).toSet
-
-        eliminate(elected, hopeful, eliminated)
+        eliminate(reallocatedSurplusResults)
       }
     }
 
-    var rounds: List[List[CandidateResult]] = List(initialResults)
+    var rounds: List[ElectionResult] = List(initialResults)
     var currentRound = initialResults
-    while(!isComplete(currentRound)) {
-      currentRound = nextRound(currentRound).toList
+    while(!currentRound.isFinal) {
+      currentRound = nextRound(currentRound)
       rounds = rounds :+ currentRound
     }
 
@@ -237,16 +242,14 @@ trait Count {
    * Count the election.
    * @return The results per candidate after the vote is counted.
    */
-  def finalCount: List[CandidateResult] = roundCounts.last
+  def finalCount: ElectionResult = roundCounts.last
 
   /**
    * Determine who wins each seat.
    * @return The candidates who fill each seat after the vote is counted.
    */
   def finalSeats: List[Option[ElectedCandidate]] = {
-    val filledSeats: List[Some[ElectedCandidate]] = finalCount.take(numSeats).collect {
-        case ElectedCandidate(candidate, votes) => Some(ElectedCandidate(candidate, votes))
-    }
+    val filledSeats: List[Some[ElectedCandidate]] = finalCount.elected.take(numSeats).map(Some(_))
     filledSeats ++ List.fill(numSeats - filledSeats.length) {None}
   }
 }

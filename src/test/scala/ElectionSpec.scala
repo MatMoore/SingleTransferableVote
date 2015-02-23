@@ -10,37 +10,51 @@ class ElectionSpec extends FunSpec with Matchers {
   val bananaVote = AllocatedVote(List(banana, apple), banana)
 
   describe("Eliminating a candidate") {
+    describe("when all candidates are elected or eliminated") {
+      val eliminated: Set[EliminatedCandidate] = Set(EliminatedCandidate(banana))
+      val elected: List[ElectedCandidate] = List(ElectedCandidate(apple, List(appleVote)))
+      it("should no longer be possible to eliminate") {
+        intercept[IllegalArgumentException] {
+          SomeCount(newElection).eliminate(ElectionResult(elected, Set(), eliminated))
+        }
+      }
+    }
     describe("when nobody has been eliminated or elected yet") {
       val eliminated: Set[EliminatedCandidate] = Set()
       val elected: List[ElectedCandidate] = List()
 
-      it("should require at least one hopeful candidate") {
+      it("an election must have hopeful candidates") {
         intercept[IllegalArgumentException] {
-          SomeCount(newElection).eliminate(elected, List(), eliminated)
+          ElectionResult(elected, Set(), eliminated)
         }
       }
 
       it("can eliminate the only hopeful") {
         val hopefulApple = HopefulCandidate(apple, List(appleVote))
-        val result = SomeCount(newElection).eliminate(elected, List(hopefulApple), eliminated)
-        result should equal (List(EliminatedCandidate(apple)))
+        val result = SomeCount(newElection).eliminate(ElectionResult(elected, Set(hopefulApple), eliminated))
+        result.eliminated should equal (Set(EliminatedCandidate(apple)))
       }
 
       describe("when apple has two votes and banana has one vote") {
         val hopefulApple = HopefulCandidate(apple, List(appleVote, appleVote))
         val hopefulBanana = HopefulCandidate(banana, List(bananaVote))
-        val result = SomeCount(newElection).eliminate(elected, List(hopefulApple, hopefulBanana), eliminated).toSet
+        val result = SomeCount(newElection).eliminate(ElectionResult(elected, Set(hopefulApple, hopefulBanana), eliminated))
 
         it("should remove banana") {
-          result should contain (EliminatedCandidate(banana))
+          result.eliminated should equal (Set(EliminatedCandidate(banana)))
         }
 
         it("should reallocate the banana vote to apple, causing it to become elected") {
-          result should contain (ElectedCandidate(apple, List(appleVote, appleVote, AllocatedVote(List(banana, apple), apple))))
+          result.elected should equal (List(
+            ElectedCandidate(
+              apple,
+              List(appleVote, appleVote, AllocatedVote(List(banana, apple), apple))
+            )
+          ))
         }
 
         it("should only contain two candidates") {
-          result should have size 2
+          result.hopefuls shouldBe empty
         }
       }
     }
