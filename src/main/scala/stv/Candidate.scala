@@ -1,4 +1,5 @@
 package stv
+import scala.util.Random
 
 case class Candidate(name: String)
 
@@ -29,35 +30,11 @@ case class AllocatedVote(vote: List[Candidate], selected: Candidate) {
    * @return New allocation for this vote
    */
   def transfer(eliminated: Set[Candidate]): Option[AllocatedVote] = {
-    vote.filter(other => !eliminated.contains(other)) match {
+    val excluded = eliminated ++ Set(selected)
+    vote.filter(other => !excluded.contains(other)) match {
+      case Nil => None
       case head :: tail => Some(AllocatedVote(vote, head))
-      case nil => None
     }
-  }
-}
-
-/**
- * The method of dealing with surplus votes for a winning candidate.
- * Surplus votes for an elected candidate should be transferred to another
- * preferred candidate to avoid wasted votes.
- */
-trait SurplusVoteAllocator {
-  /**
-   * Reassign surplus votes from the donors to the receivers.
-   * It is up to the implementation whether to allow transfers to already elected candidates.
-   * @param quota number of votes required to become elected
-   * @param donors list of elected candidates
-   * @param receivers list of unelected candidates
-   * @return
-   */
-  def reallocateFromDonors(
-    quota: Int,
-    donors: Iterable[ElectedCandidate],
-    receivers: Iterable[CandidateResult]
-  ): Tuple2[ElectionResult, Boolean]
-
-  def reallocate(quota: Int, initial: ElectionResult): Tuple2[ElectionResult, Boolean] = {
-    reallocateFromDonors(quota, initial.elected, initial.hopefuls)
   }
 }
 
@@ -98,8 +75,18 @@ final case class ElectionResult(elected: List[ElectedCandidate] = List(), hopefu
   def isFinal = hopefuls.nonEmpty
 }
 
+
 /**
- * Determines the result of an election.
+ * A count determines the result of an election.
+ *
+ * Counting methods differ in how the quota is determined and how unused votes
+ * may be transferred.
+ *
+ * A wasted vote is a vote that cannot be allocated to a candidate,
+ * because all expressed preferences have been elected already or
+ * eliminated. These votes are simply discarded.
+ * STV counting methods aim to minimise these by transferring the vote to the
+ * next preferred candidate whenever possible.
  */
 trait Count {
   val election: Election
@@ -129,9 +116,46 @@ trait Count {
   lazy val hareQuota: Int = numVotes / numSeats
 
   /**
-   * Method of reallocating surplus votes from elected candidates.
+   * Reallocate a random number of surplus votes from a single elected candidate
    */
-  def surplusAllocator: SurplusVoteAllocator
+  def reallocateRandomSurplus(donor: ElectedCandidate, ignore: Set[Candidate]): List[AllocatedVote] = {
+    val surplus = donor.votes.length - quota
+    reallocateSurplusVotes(Random.shuffle(donor.votes).take(surplus), ignore)
+  }
+
+  /**
+   * Reallocate a set of votes, ignoring already eliminated candidates,
+   * and dropping wasted votes.
+   * @param votes Surplus votes to be reallocated
+   * @param ignore Candidates that shouldn't receive new votes
+   * @return A new list of allocated votes, of length equal to or less than the original list
+   */
+  def reallocateSurplusVotes(votes: List[AllocatedVote], ignore: Set[Candidate]): List[AllocatedVote] = {
+    votes.map(_.transfer(ignore)).collect {
+      case Some(allocatedVote) => allocatedVote
+    }
+  }
+
+  /**
+   * Reallocate surplus votes of elected candidates one by one, ignoring prior winners and eliminated candidates
+   * I think this is the Hare method (???)
+   * Ignoring prior winners means this function will eventually terminate, because we will just throw away
+   * votes that cannot be transferred.
+   * @param initial
+   * @return A new election result after reallocation has taken place
+   */
+  def reallocateAllSurplus(initial: ElectionResult): ElectionResult = {
+    val donors = initial.elected.filter(_.votes.length > quota)
+    donors match {
+      case Nil => initial
+      case donor :: tail => {
+        val ignore = initial.eliminated.map(_.candidate) ++ initial.elected.map(_.candidate).toSet
+        val reallocatedVotes = reallocateRandomSurplus(donor, ignore)
+        val newResult = countAllocation(reallocatedVotes, initial.eliminated)
+        reallocateAllSurplus(newResult)
+      }
+    }
+  }
 
   /**
    * Find new elected candidates from the hopeful set.
@@ -147,7 +171,28 @@ trait Count {
   }
 
   /**
-   * Eliminate a single candidate. TODO: separate out candidate selection
+   * Partition a set of allocated votes into Elected/Unelected lists
+   * @param votes All allocated votes
+   * @return Tuple of elected list and hopeful list
+   */
+  def partition(votes: List[AllocatedVote]): Tuple2[List[ElectedCandidate], Set[HopefulCandidate]] = {
+    val hopefuls = votes.groupBy(_.selected).map(group => HopefulCandidate(group._1, group._2))
+    repartition(hopefuls.toSet)
+  }
+
+  /**
+   * Count an allocation of votes.
+   * @param votes All allocated votes
+   * @param eliminated All eliminated candidates
+   * @return The current election result given this vote allocation
+   */
+  def countAllocation(votes: List[AllocatedVote], eliminated: Set[EliminatedCandidate]) = {
+    val (elected, hopeful) = partition(votes)
+    ElectionResult(elected, hopeful, eliminated)
+  }
+
+  /**
+   * Eliminate a single candidate.
    * @param currentResult the current election result
    * @return The new result
    */
@@ -223,7 +268,8 @@ trait Count {
      * @return The results after running a new round of counting.
      */
     def nextRound(currentRound: ElectionResult): ElectionResult = {
-      val (reallocatedSurplusResults, newlyElected) = surplusAllocator.reallocate(quota, initialResults)
+      val reallocatedSurplusResults = reallocateAllSurplus(currentRound)
+      val newlyElected = reallocatedSurplusResults.elected.length - currentRound.elected.length > 0
 
       if(newlyElected) {
         reallocatedSurplusResults
@@ -260,7 +306,6 @@ trait Count {
 
 case class SomeCount(election: Election) extends Count {
   val quota = droopQuota
-  val surplusAllocator = null // TODO
 }
 
 object Test extends App {
