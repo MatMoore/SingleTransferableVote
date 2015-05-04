@@ -12,7 +12,7 @@ case class Candidate(name: String)
 case class Election(candidates: Set[Candidate], votes: List[List[Candidate]] = List(), seats: Int = 1) {
   def vote(ranking: List[Candidate]) = {
     require {ranking.forall(candidates.contains(_))}
-    Election(candidates, ranking :: votes.toList)
+    Election(candidates, ranking :: votes.toList, seats)
   }
 }
 
