@@ -100,10 +100,8 @@ trait Count {
    * @return The minimum number of votes a candidate must have to be elected.
    */
   def quota: Int
-  def meetsQuota(numVotes: Int): Boolean = numVotes > quota
+  def meetsQuota(numVotes: Int): Boolean = numVotes >= quota
   def meetsQuota(votes: List[AllocatedVote]): Boolean = meetsQuota(votes.length)
-
-  // TODO: these may be off by one due to integer division
 
   /**
    * Fixed Droop Quota for the election.
