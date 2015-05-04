@@ -72,7 +72,7 @@ final case class EliminatedCandidate(candidate: Candidate) extends CandidateResu
 final case class ElectionResult(elected: List[ElectedCandidate] = List(), hopefuls: Set[HopefulCandidate] = Set(), eliminated: Set[EliminatedCandidate] = Set()) {
   require(elected.nonEmpty || hopefuls.nonEmpty || eliminated.nonEmpty)
 
-  def isFinal = hopefuls.nonEmpty
+  def isFinal = hopefuls.isEmpty
 }
 
 
