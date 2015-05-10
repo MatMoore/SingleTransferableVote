@@ -306,6 +306,48 @@ case class SomeCount(election: Election) extends Count {
   val quota = droopQuota
 }
 
+case class RepeatedIRVCount(election: Election) extends Count {
+  val quota = droopQuota
+
+  override def roundCounts: List[ElectionResult] = {
+    def holdNextRunoffElection(election: Election): List[ElectionResult] = {
+      SomeCount(Election(election.candidates, election.votes, seats=1)).roundCounts
+    }
+
+    def filterVotes(ballots: List[List[Candidate]], excluded: Set[Candidate]): List[List[Candidate]] = {
+      ballots.flatMap { oldBallot: List[Candidate] =>
+        val ballot = oldBallot.filterNot(excluded)
+        if (ballot.length > 0) {
+          Some(ballot)
+        } else {
+          None
+        }
+      }
+    }
+
+    def countElection(election: Election): List[ElectionResult] = {
+      val first = holdNextRunoffElection(election)
+      println(first.length)
+      if(election.seats > 1) {
+        val last = first.last
+        val excluded: Set[Candidate] = last.elected.map(_.candidate).toSet
+        val newBallots = filterVotes(election.votes, excluded)
+        println("!!!!")
+        println(newBallots.toString)
+        if(newBallots.length > 0) {
+          first ++ countElection(Election(election.candidates.filterNot(excluded), newBallots, election.seats - 1))
+        } else {
+          first
+        }
+      } else {
+        first
+      }
+    }
+
+    countElection(election)
+  }
+}
+
 object Test extends App {
   val foo = Candidate("Foo")
   val bar = Candidate("Bar")
